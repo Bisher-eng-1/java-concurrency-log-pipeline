@@ -1,0 +1,10 @@
+2026-01-15T08:00:01.102Z|INFO|api-gateway|evt-000001|Incoming POST /api/v1/orders routed successfully in 14ms
+2026-01-15T08:00:01.215Z|DEBUG|auth-service|evt-000002|Token signature verified for session=89a1f
+2026-01-15T08:00:01.340Z|WARN|payment-worker|evt-000003|Downstream gateway latency exceeded 450ms threshold
+2026-01-15T08:00:01.412Z|ERROR|payment-worker|evt-000004|Timeout waiting for settlement response after 2000ms
+2026-01-15T08:00:01.519Z|INFO|order-processor|evt-000005|Order ord-9921 state transitioned to CONFIRMED
+MALFORMED_LINE_WITHOUT_DELIMITERS
+2026-01-15T08:00:01.601Z|ERROR|cache-node|evt-000006|Connection reset by peer while reading key session_412
+2026-01-15T08:00:01.710Z|INVALID_LEVEL|api-gateway|evt-000007|Line with unrecognized severity level
+2026-01-15T08:00:01.825Z|INFO|notification-dispatcher|evt-000008|Dispatched webhook event id=wh-4410
+2026-01-15T08:00:01.990Z|WARN|cache-node|evt-000009|Eviction rate elevated: 842 keys/sec
