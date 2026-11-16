@@ -15,9 +15,6 @@ import com.bisher.logpipeline.reporting.ConsoleReporter;
 
 import java.io.IOException;
 
-/**
- * Central CLI entry point and execution coordinator for the Java Concurrency Log Pipeline.
- */
 public final class LogProcessor {
 
     private LogProcessor() {

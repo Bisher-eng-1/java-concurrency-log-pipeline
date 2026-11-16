@@ -6,22 +6,10 @@ import com.bisher.logpipeline.model.LogLevel;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 
-/**
- * Stateless, thread-safe parser for pipe-delimited log lines:
- * {@code <ISO-8601-timestamp>|<LEVEL>|<service>|<eventId>|<message>}
- */
 public final class LogParser {
 
     private static final int EXPECTED_FIELD_COUNT = 5;
 
-    /**
-     * Parses and validates a single raw log line.
-     *
-     * @param rawLine raw text line
-     * @return validated {@link LogEvent}
-     * @throws MalformedLogException if the line is null, blank, has wrong field count,
-     *                               invalid timestamp, invalid severity, or blank metadata
-     */
     public LogEvent parse(String rawLine) throws MalformedLogException {
         if (rawLine == null || rawLine.isBlank()) {
             throw new MalformedLogException("Blank or null log record");

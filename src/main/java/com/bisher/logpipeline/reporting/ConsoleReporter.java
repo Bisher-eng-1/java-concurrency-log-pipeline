@@ -7,9 +7,6 @@ import java.io.PrintStream;
 import java.util.Locale;
 import java.util.Map;
 
-/**
- * Formats single-mode execution summaries and sequential-vs-concurrent comparison reports.
- */
 public final class ConsoleReporter {
 
     private final PrintStream out;

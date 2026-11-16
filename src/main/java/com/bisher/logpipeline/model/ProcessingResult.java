@@ -5,9 +5,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 
-/**
- * Immutable snapshot of log pipeline aggregation metrics and execution telemetry.
- */
 public record ProcessingResult(
         String mode,
         int workerCount,
@@ -44,10 +41,6 @@ public record ProcessingResult(
         return totalRecords / durationSeconds();
     }
 
-    /**
-     * Verifies deterministic logical equivalence against another result, ignoring
-     * execution mode, timing, and concurrency-specific telemetry.
-     */
     public boolean isLogicallyEquivalent(ProcessingResult other) {
         if (other == null) {
             return false;

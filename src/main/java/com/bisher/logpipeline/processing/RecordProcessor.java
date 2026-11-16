@@ -7,10 +7,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.function.Consumer;
 
-/**
- * Applies identical parsing, enrichment/checksum work, and error isolation rules
- * across both sequential and concurrent execution modes.
- */
 public final class RecordProcessor {
 
     private final LogParser parser;
@@ -30,13 +26,6 @@ public final class RecordProcessor {
         this.postParseHook = postParseHook;
     }
 
-    /**
-     * Processes a single raw record and updates the supplied aggregator.
-     * Malformed records and unexpected runtime exceptions are isolated so one bad
-     * record cannot silently corrupt or abort aggregation of valid records.
-     *
-     * @return deterministic checksum computed during enrichment (used to prevent dead-code elimination)
-     */
     public long process(String rawLine, ResultAggregator aggregator) {
         Objects.requireNonNull(aggregator, "aggregator must not be null");
         try {
@@ -57,10 +46,6 @@ public final class RecordProcessor {
         }
     }
 
-    /**
-     * Performs deterministic CPU-bound message normalization/hashing work per event
-     * so sequential vs concurrent benchmarks model realistic per-record computation.
-     */
     private long computeDeterministicFingerprint(LogEvent event) {
         if (workIterations == 0) {
             return event.eventId().hashCode();

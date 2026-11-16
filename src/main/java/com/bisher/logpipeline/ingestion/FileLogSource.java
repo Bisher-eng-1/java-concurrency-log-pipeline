@@ -11,9 +11,6 @@ import java.util.Iterator;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 
-/**
- * Streaming file-backed {@link LogSource} that reads line by line using a buffered reader.
- */
 public class FileLogSource implements LogSource {
 
     private final Path filePath;

@@ -9,20 +9,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.stream.Collectors;
 
-/**
- * Thread-safe aggregator designed for concurrent worker updates without coarse-grained locking.
- * <p>
- * Concurrency design rationale:
- * <ul>
- *     <li>{@link LongAdder} is used for high-frequency counters (total, valid, INFO/DEBUG/WARN/ERROR)
- *         because it stripes updates across thread-local cells under contention instead of forcing
- *         every thread to retry a single CAS loop.</li>
- *     <li>{@link AtomicInteger} is used for lower-frequency exception/malformed counters where
- *         single-word atomic semantics are sufficient and memory footprint is smaller.</li>
- *     <li>{@link ConcurrentHashMap} combined with {@code computeIfAbsent(..., k -> new LongAdder())}
- *         provides thread-safe per-service error grouping without a global map lock.</li>
- * </ul>
- */
 public final class ConcurrentAggregator implements ResultAggregator {
 
     private final LongAdder totalRecords = new LongAdder();

@@ -3,9 +3,6 @@ package com.bisher.logpipeline.model;
 import java.nio.file.Path;
 import java.util.Optional;
 
-/**
- * Validated runtime configuration parsed from CLI arguments.
- */
 public record PipelineConfig(
         ExecutionMode mode,
         int workers,

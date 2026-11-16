@@ -6,13 +6,6 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Random;
 
-/**
- * Deterministic streaming generator of synthetic log events.
- * <p>
- * Note: All records produced by this class are synthetic test fixtures generated
- * from a fixed PRNG seed for reproducible benchmarking and fault-handling tests.
- * They do not represent real production traffic.
- */
 public class SyntheticLogGenerator implements LogSource {
 
     private static final List<String> SERVICES = List.of(

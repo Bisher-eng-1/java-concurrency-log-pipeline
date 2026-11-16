@@ -7,22 +7,23 @@ import com.bisher.logpipeline.processing.RecordProcessor;
 
 import java.util.Objects;
 
-/**
- * Single-threaded baseline log pipeline executing ingestion, parsing, enrichment,
- * and aggregation sequentially on the calling thread.
- */
 public final class SequentialPipeline {
 
     private final RecordProcessor recordProcessor;
+    private volatile long lastChecksum;
 
     public SequentialPipeline(RecordProcessor recordProcessor) {
         this.recordProcessor = Objects.requireNonNull(recordProcessor, "recordProcessor must not be null");
     }
 
+    public long lastChecksum() {
+        return lastChecksum;
+    }
+
     public ProcessingResult execute(LogSource source) {
         Objects.requireNonNull(source, "source must not be null");
-        SequentialAggregator aggregator = new SequentialAggregator();
 
+        SequentialAggregator aggregator = new SequentialAggregator();
         long startNanos = System.nanoTime();
         long fingerprintAccumulator = 0L;
 
@@ -34,10 +35,7 @@ public final class SequentialPipeline {
         }
 
         long durationNanos = System.nanoTime() - startNanos;
-        // Prevent JIT from eliminating deterministic computation
-        if (fingerprintAccumulator == Long.MIN_VALUE) {
-            System.err.print("");
-        }
+        this.lastChecksum = fingerprintAccumulator;
 
         return aggregator.snapshot("sequential", 1, 0, durationNanos, 0, 0);
     }

@@ -3,9 +3,6 @@ package com.bisher.logpipeline.model;
 import java.time.Instant;
 import java.util.Objects;
 
-/**
- * Immutable parsed representation of a single log event.
- */
 public record LogEvent(
         String eventId,
         Instant timestamp,

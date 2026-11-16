@@ -15,13 +15,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * Executes indicative Sequential vs. Concurrent benchmarks over identical datasets.
- * <p>
- * Note on methodology: This runner executes in-process wall-clock timing after optional
- * warm-up runs to let C2 JIT compilation stabilize. It provides an indicative application-level
- * comparison rather than a JMH-isolated microbenchmark.
- */
 public final class BenchmarkRunner {
 
     public record ComparisonReport(

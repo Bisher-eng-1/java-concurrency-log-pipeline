@@ -7,10 +7,6 @@ import com.bisher.logpipeline.model.ProcessingResult;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * Single-threaded aggregator using plain primitive counters and {@link HashMap}
- * with zero synchronization overhead. Not thread-safe.
- */
 public final class SequentialAggregator implements ResultAggregator {
 
     private long totalRecords = 0;
