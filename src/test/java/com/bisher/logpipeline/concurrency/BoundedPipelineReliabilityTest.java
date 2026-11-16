@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BoundedPipelineReliabilityTest {
@@ -56,27 +57,22 @@ class BoundedPipelineReliabilityTest {
         }, "test-coordinator");
 
         coordinator.start();
-        assertTrue(workerEntered.await(5, TimeUnit.SECONDS), "Worker should pick up first event");
+        assertTrue(workerEntered.await(5, TimeUnit.SECONDS));
 
-        // Wait deterministically until producer fills queue to capacity
         long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (coordinator.getState() != Thread.State.WAITING && System.nanoTime() < deadlineNanos) {
             Thread.onSpinWait();
         }
-        assertEquals(Thread.State.WAITING, coordinator.getState(),
-                "Producer thread should block in queue.put() once bounded queue saturates");
+        assertEquals(Thread.State.WAITING, coordinator.getState());
 
-        // Release worker and confirm clean completion
         releaseWorker.countDown();
         coordinator.join(5000);
-        assertFalse(coordinator.isAlive(), "Coordinator thread should complete cleanly");
+        assertFalse(coordinator.isAlive());
 
         ProcessingResult result = resultRef.get();
         assertEquals(totalEvents, result.totalRecords());
-        assertTrue(result.maxObservedQueueDepth() <= queueCapacity,
-                "Observed queue depth must never exceed configured capacity");
-        assertTrue(result.blockedProducerEvents() > 0,
-                "Backpressure counter must record blocked producer attempts");
+        assertTrue(result.maxObservedQueueDepth() <= queueCapacity);
+        assertTrue(result.blockedProducerEvents() > 0);
     }
 
     @Test
@@ -91,7 +87,7 @@ class BoundedPipelineReliabilityTest {
         long lingeringWorkers = Thread.getAllStackTraces().keySet().stream()
                 .filter(t -> t.getName().startsWith("log-worker-") && t.isAlive())
                 .count();
-        assertEquals(0L, lingeringWorkers, "No worker threads should remain alive after execute() returns");
+        assertEquals(0L, lingeringWorkers);
     }
 
     @Test
@@ -106,7 +102,6 @@ class BoundedPipelineReliabilityTest {
 
         LogSource source = new SyntheticLogGenerator(100, 55L, 0.0);
         ProcessingResult seq = new SequentialPipeline(faultyProcessor).execute(source);
-
         seen.set(0);
         ProcessingResult conc = new BoundedLogPipeline(faultyProcessor, 2, 16).execute(source);
 
@@ -120,13 +115,23 @@ class BoundedPipelineReliabilityTest {
 
     @Test
     @Timeout(value = 10, unit = TimeUnit.SECONDS)
-    void handlesCoordinatorInterruptionGracefullyWithoutHangingWorkers() throws Exception {
-        CountDownLatch firstConsumed = new CountDownLatch(1);
-        RecordProcessor slowProcessor = new RecordProcessor(new LogParser(), 0, event -> {
-            firstConsumed.countDown();
+    void abortsProducerWithoutDeadlockWhenAllWorkersCrash() {
+        RecordProcessor crashingProcessor = new RecordProcessor(new LogParser(), 0, event -> {
+            throw new AssertionError("Simulated fatal worker error");
         });
 
-        // Infinite synthetic stream until interrupted
+        BoundedLogPipeline pipeline = new BoundedLogPipeline(crashingProcessor, 1, 2);
+        LogSource source = new SyntheticLogGenerator(500, 3L, 0.0);
+
+        assertThrows(IllegalStateException.class, () -> pipeline.execute(source));
+    }
+
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    void handlesCoordinatorInterruptionGracefullyWithoutHangingWorkers() throws Exception {
+        CountDownLatch firstConsumed = new CountDownLatch(1);
+        RecordProcessor slowProcessor = new RecordProcessor(new LogParser(), 0, event -> firstConsumed.countDown());
+
         LogSource infiniteSource = new LogSource() {
             @Override
             public String description() {
@@ -164,10 +169,11 @@ class BoundedPipelineReliabilityTest {
 
         runner.start();
         assertTrue(firstConsumed.await(5, TimeUnit.SECONDS));
+
         runner.interrupt();
         runner.join(5000);
 
-        assertFalse(runner.isAlive(), "Pipeline must terminate promptly when interrupted");
+        assertFalse(runner.isAlive());
         assertInstanceOf(InterruptedException.class, thrown.get());
     }
 }

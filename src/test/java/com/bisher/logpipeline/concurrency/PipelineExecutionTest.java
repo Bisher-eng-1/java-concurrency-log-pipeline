@@ -42,7 +42,7 @@ class PipelineExecutionTest {
     }
 
     @Test
-    void processesFiftyThousandSyntheticEventsWithIdenticalAggregation() throws Exception {
+    void processesFiftyThousandSyntheticEventsWithIdenticalAggregationAndChecksum() throws Exception {
         int events = 50_000;
         long seed = 1337L;
         double malformedRate = 0.02;
@@ -51,14 +51,17 @@ class PipelineExecutionTest {
         LogSource seqSource = new SyntheticLogGenerator(events, seed, malformedRate);
         LogSource concSource = new SyntheticLogGenerator(events, seed, malformedRate);
 
-        ProcessingResult seq = new SequentialPipeline(processor).execute(seqSource);
-        ProcessingResult conc = new BoundedLogPipeline(processor, 4, 1000).execute(concSource);
+        SequentialPipeline sequential = new SequentialPipeline(processor);
+        BoundedLogPipeline concurrent = new BoundedLogPipeline(processor, 4, 1000);
+
+        ProcessingResult seq = sequential.execute(seqSource);
+        ProcessingResult conc = concurrent.execute(concSource);
 
         assertEquals(events, seq.totalRecords());
-        assertTrue(seq.invalidRecords() > 0, "Expected malformed synthetic records");
-        assertTrue(seq.errorCount() > 0, "Expected ERROR severity records");
-        assertTrue(seq.isLogicallyEquivalent(conc),
-                "Sequential and concurrent aggregations must be strictly equivalent");
+        assertTrue(seq.invalidRecords() > 0);
+        assertTrue(seq.errorCount() > 0);
+        assertTrue(seq.isLogicallyEquivalent(conc));
+        assertEquals(sequential.lastChecksum(), concurrent.lastChecksum());
     }
 
     @ParameterizedTest
@@ -91,6 +94,7 @@ class PipelineExecutionTest {
                 "2026-01-15T08:00:04Z|DEBUG|auth-service|e4|trace",
                 "2026-01-15T08:00:05Z|ERROR|auth-service|e5|timeout"
         );
+
         LogSource fixedSource = new LogSource() {
             @Override
             public String description() {
