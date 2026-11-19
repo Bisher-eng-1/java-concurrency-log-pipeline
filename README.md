@@ -1,14 +1,81 @@
 # Java Concurrency Log Pipeline
 
-A Java 17 log ingestion, validation, and aggregation pipeline comparing single-threaded execution (`SequentialPipeline`) against a bounded producer-consumer pool (`BoundedLogPipeline`).
+A pure JDK 17 log ingestion and aggregation pipeline comparing single-threaded execution (`SequentialPipeline`) against a bounded producer-consumer pool (`BoundedLogPipeline`).
 
-Outside of JUnit 5 in test scope, the codebase carries zero third-party runtime dependencies. Queue backpressure, thread-local parity fingerprinting, contended counter aggregation, and failure isolation are implemented directly on the JDK 17 standard library (`ArrayBlockingQueue`, `ExecutorService`, `LongAdder`, `ConcurrentHashMap`, `AtomicReference`).
+Outside of JUnit 5 for tests, there are no external runtime dependencies. Backpressure (`ArrayBlockingQueue`), thread-local checksum accumulation, `LongAdder` counters, and worker failure isolation are built directly on the Java standard library.
 
----
+## Build & Run
 
-## Execution Model & Backpressure
+Requires JDK 17 and Maven 3.8+:
 
-A single coordinator thread reads records lazily from `LogSource` (`FileLogSource` or `SyntheticLogGenerator`) and feeds a fixed-capacity `ArrayBlockingQueue`. Workers pull records concurrently, parse and hash each line, and aggregate counts into `ConcurrentAggregator`.
+```bash
+mvn clean test
+mvn package -DskipTests
+java -jar target/java-concurrency-log-pipeline.jar
+```
+
+Other examples:
+
+```bash
+# Run sequential mode on the bundled sample file
+java -jar target/java-concurrency-log-pipeline.jar --mode sequential --input src/main/resources/sample-logs.txt
+
+# Run concurrent mode with explicit queue bounds
+java -jar target/java-concurrency-log-pipeline.jar --mode concurrent --workers 4 --queue-capacity 500 --events 10000
+
+# Compare modes with lighter per-record CPU work
+java -jar target/java-concurrency-log-pipeline.jar --mode compare --workers 4 --events 50000 --work-iterations 10
+```
+
+Docker build and run (`maven:3.9.6-eclipse-temurin-17` multi-stage into `eclipse-temurin:17-jre-jammy`, non-root user `pipeline`):
+
+```bash
+docker build -t java-concurrency-log-pipeline .
+docker run --rm java-concurrency-log-pipeline --mode compare --workers 4 --events 50000
+```
+
+## Sample Output (`--mode compare`)
+
+Measured with `java -jar target/java-concurrency-log-pipeline.jar --mode compare --workers 4 --events 50000` on a 4-core JDK 17 Linux runner:
+
+```text
+============================================================
+JAVA CONCURRENCY LOG PIPELINE
+============================================================
+Dataset: 50,000 events (Synthetic stream (events=50000, seed=42, malformedRate=1.00%))
+Warm-up Runs: 1 | Measured Repeats: 3 | Available CPU Cores: 4
+Sequential Processing:
+Execution Time: 165.20 ms (avg over 3 runs)
+Throughput:     312,111 records/sec
+Concurrent Processing:
+Workers:         4 (Queue Capacity: 1000)
+Execution Time:  101.38 ms (avg over 3 runs)
+Throughput:      574,398 records/sec
+Max Queue Depth: 1000 | Producer Backpressure Blocks: 32
+Result Verification:
+Sequential and concurrent outputs: MATCH
+Performance Comparison:
+Concurrent mode achieved 1.63x speedup over sequential mode.
+------------------------------------------------------------
+Aggregation Summary:
+  Total Records:       50,000
+  Valid Records:       49,531
+  Invalid (Malformed): 469
+  Processing Failures: 0
+  INFO: 29,636 | DEBUG: 9,890 | WARN: 6,511 | ERROR: 3,494
+  Errors by Service:
+    - api-gateway:             584
+    - auth-service:            555
+    - cache-node:              570
+    - notification-dispatcher: 634
+    - order-processor:         575
+    - payment-worker:          576
+============================================================
+```
+
+## How the Pipeline Works
+
+A single coordinator thread reads lines lazily from `LogSource` (`FileLogSource` or `SyntheticLogGenerator`) into a fixed-capacity `ArrayBlockingQueue`. Workers pull records from the queue, parse and hash them, and record results into `ConcurrentAggregator`.
 
 ```mermaid
 sequenceDiagram
@@ -41,17 +108,15 @@ sequenceDiagram
     end
 ```
 
-Three design details carry the concurrency guarantees:
+Implementation notes from `concurrency/`, `processing/`, and `aggregation/`:
 
-1. **Backpressure without unbounded memory growth.** The coordinator attempts non-blocking `queue.offer()` before falling back to blocking `queue.put()`, incrementing `blockedProducerEvents` on every full-queue stall and tracking `maxObservedQueueDepth`. If downstream workers slow down, the producer blocks at the queue boundary rather than buffering millions of lines on the heap.
-2. **Deadlock-free abort when workers crash.** Normal shutdown sends one `POISON_PILL` sentinel per worker after the input stream ends. The subtle failure mode is when all worker threads abort on an uncaught JVM `Error` while the coordinator is parked inside `queue.put()` on a full queue—without an explicit wake-up, the coordinator would wait forever. Each worker tracks exit via `activeWorkers`; when the final worker leaves abnormally (`remaining == 0 && !receivedPoison && workerFailure.get() != null`), it calls `coordinatorThread.interrupt()` so the caller fails fast with the underlying cause.
-3. **Zero per-record contention on checksums and counters.** Updating a shared atomic checksum on every event would bounce cache lines across cores. Instead, each worker accumulates its FNV-1a-style event fingerprint in a thread-local `localFingerprint` variable and folds it into `fingerprintSink` once on exit via commutative XOR (`left ^ right`). Aggregation counters (`totalRecords`, `validRecords`, per-level counts) and per-service error buckets (`ConcurrentHashMap<String, LongAdder>`) rely on `LongAdder` striping, while `RecordProcessor` isolates schema errors (`MalformedLogException`) from unexpected `RuntimeException`s so bad records never abort healthy ones.
+- **Bounded backpressure:** The coordinator tries `queue.offer()` first and falls back to blocking `queue.put()` when the queue is full, incrementing `blockedProducerEvents` and recording `maxObservedQueueDepth` so memory stays bounded if workers fall behind.
+- **Aborting cleanly if all workers die:** Under normal shutdown, the coordinator pushes one `POISON_PILL` sentinel per worker. If all workers abort on an uncaught `Error` while the coordinator is parked in `queue.put()`, the last worker exiting (`activeWorkers == 0` with `workerFailure != null`) calls `coordinatorThread.interrupt()` so the coordinator unblocks instead of hanging indefinitely.
+- **Avoiding shared-state contention:** Each worker updates a thread-local `localFingerprint` variable and folds it into `fingerprintSink` once at exit via atomic XOR, while event counters and `ConcurrentHashMap<String, LongAdder>` per-service error buckets use `LongAdder` striping. `RecordProcessor` catches `MalformedLogException` separately from unexpected `RuntimeException`s so bad lines do not stop healthy ones.
 
----
+## Input Format & Benchmarking Rules
 
-## Record Format & Tuning Compute Cost
-
-Input lines follow a 5-field pipe-delimited layout:
+`LogParser` splits pipe-delimited lines with `rawLine.split("\\|", 5)`, preserving literal `|` characters inside the message field:
 
 ```text
 +--------------------------+-------+-------------+----------+----------------------+
@@ -60,53 +125,11 @@ Input lines follow a 5-field pipe-delimited layout:
 +--------------------------+-------+-------------+----------+----------------------+
 ```
 
-`LogParser` splits with `rawLine.split("\\|", 5)`, so literal `|` characters inside the message payload are preserved intact. Valid severity levels are `INFO`, `DEBUG`, `WARN`, and `ERROR`. A mixed valid/malformed fixture is included at `src/main/resources/sample-logs.txt`.
+Valid levels are `INFO`, `DEBUG`, `WARN`, and `ERROR`. A sample fixture is included at `src/main/resources/sample-logs.txt`. Because simple parsing finishes in nanoseconds, `--work-iterations` (default `50`) adjusts the FNV-1a work loop inside `RecordProcessor` to test coordination-bound vs. CPU-bound workloads.
 
-Because pure string splitting completes in nanoseconds per line, queue handoffs easily outweigh parsing overhead on small payloads. `--work-iterations` (default `50`) controls the deterministic FNV-1a pass count inside `RecordProcessor`, letting you sweep workloads from coordination-bound (where `SequentialPipeline` can beat multi-threading) to compute-bound.
+`BenchmarkRunner` runs `--warmup` discarded passes (default `1`) before `--repeats` measured pairs (default `3`), alternating which mode runs first on each repeat (`sequential` first on even repeats, `concurrent` first on odd repeats) to avoid GC or thermal skew. Every repeat verifies `ProcessingResult.isLogicallyEquivalent()`; any mismatch exits with code `2`.
 
----
-
-## Benchmarking Methodology (`compare` Mode)
-
-`BenchmarkRunner` runs `--warmup` unmeasured iterations (default `1`) to let JIT compilation settle, then executes `--repeats` measured pairs (default `3`). To avoid systematic GC or thermal bias favoring whichever pipeline runs second, `BenchmarkRunner` flips execution order on alternating repeats (`sequential` first on even indices, `concurrent` first on odd indices).
-
-Each repeat asserts `ProcessingResult.isLogicallyEquivalent()` across total/valid/invalid/failure counts, per-level totals, and sorted `errorsByService` maps (`TreeMap`). If outputs ever diverge, `LogProcessor` exits with status `2`. When coordination overhead outweighs parallel compute gain, `ConsoleReporter` explicitly reports the slowdown rather than hiding it.
-
----
-
-## Build & Run
-
-Requires JDK 17 and Maven 3.8+:
-
-```bash
-mvn clean test
-mvn package -DskipTests
-```
-
-Run standalone modes or side-by-side comparison:
-
-```bash
-# Default comparison (4 workers, queue capacity 1000, 50,000 synthetic events)
-java -jar target/java-concurrency-log-pipeline.jar
-
-# Sequential pass against the bundled sample fixture
-java -jar target/java-concurrency-log-pipeline.jar --mode sequential --input src/main/resources/sample-logs.txt
-
-# Concurrent run with explicit backpressure bounds
-java -jar target/java-concurrency-log-pipeline.jar --mode concurrent --workers 4 --queue-capacity 500 --events 10000
-
-# Compare modes with lighter per-record CPU work
-java -jar target/java-concurrency-log-pipeline.jar --mode compare --workers 4 --events 50000 --work-iterations 10
-```
-
-Run via Docker (multi-stage build from `maven:3.9.6-eclipse-temurin-17` into `eclipse-temurin:17-jre-jammy`, running as non-root user `pipeline`):
-
-```bash
-docker build -t java-concurrency-log-pipeline .
-docker run --rm java-concurrency-log-pipeline --mode compare --workers 4 --events 50000
-```
-
-### CLI Options & Exit Codes
+## CLI Reference
 
 | Flag | Default | Notes |
 |---|---|---|
@@ -120,24 +143,22 @@ docker run --rm java-concurrency-log-pipeline --mode compare --workers 4 --event
 | `--warmup` | `1` | Discarded warm-up runs in `compare` mode (`>= 0`) |
 | `--work-iterations` | `50` | Deterministic FNV-1a loops per event (`>= 0`) |
 | `--input` | unset | Path to log file (disables synthetic generation) |
-| `--help`, `-h` | — | Print usage and exit `0` |
+| `--help`, `-h` | none | Print usage and exit `0` |
 
-**Exit codes:** `0` success, `1` bad arguments / I/O error / execution failure, `2` sequential-vs-concurrent output divergence in `compare` mode.
+Exit codes: `0` success, `1` bad arguments / I/O or execution error, `2` sequential vs. concurrent divergence in `compare` mode.
 
----
-
-## Project Layout
+## Tests, Layout & Scope Notes
 
 ```text
 src/main/java/com/bisher/logpipeline/
-  LogProcessor.java       # CLI entrypoint, mode dispatch, and exit codes
+  LogProcessor.java       # CLI entrypoint, mode dispatch, exit codes
   ingestion/              # LogSource, lazy FileLogSource, SyntheticLogGenerator
   processing/             # LogParser, MalformedLogException, RecordProcessor
-  concurrency/            # SequentialPipeline and BoundedLogPipeline
+  concurrency/            # SequentialPipeline, BoundedLogPipeline
   aggregation/            # ResultAggregator, SequentialAggregator, ConcurrentAggregator
-  benchmark/              # BenchmarkRunner (warm-up and alternating-order runs)
-  reporting/              # ConsoleReporter formatting single and comparison output
-  model/                  # Immutable LogEvent, LogLevel, PipelineConfig, ProcessingResult
+  benchmark/              # BenchmarkRunner (warm-up and alternating runs)
+  reporting/              # ConsoleReporter formatting
+  model/                  # LogEvent, LogLevel, PipelineConfig, ProcessingResult
 src/test/java/com/bisher/logpipeline/
   LogProcessorCliTest.java
   processing/LogParserTest.java
@@ -146,19 +167,6 @@ src/test/java/com/bisher/logpipeline/
   concurrency/BoundedPipelineReliabilityTest.java
 ```
 
----
+The five JUnit 5 suites test parsing edge cases, lost-update resistance, 50,000-event checksum and count parity, full-queue backpressure, worker crash isolation, deadlock-free abort, and CLI validation. `.github/workflows/ci.yml` runs `mvn -B clean test`, packages the JAR, executes all three CLI modes, and verifies the multi-stage Docker build.
 
-## Verification & CI
-
-The five JUnit 5 suites verify parsing edge cases (including embedded `|` preservation), lost-update resistance under contention, 50,000-event checksum and aggregation parity across varied worker/queue sizes, backpressure saturation, worker exception isolation, deadlock-free abort when all workers crash, and CLI error handling.
-
-`.github/workflows/ci.yml` runs `mvn -B clean test`, packages the executable JAR, executes `sequential`, `concurrent`, and `compare` CLI checks, and validates the multi-stage Docker build on every push and pull request.
-
----
-
-## Limitations
-
-- **In-process wall-clock timing rather than JMH:** Measurements run inside a single JVM after warm-up rather than forked JMH processes, so numbers include host scheduling and GC pauses.
-- **No durable offset checkpointing:** `BoundedLogPipeline` processes streams in memory; a JVM crash mid-file does not resume from the last processed line.
-- **Unbounded service map keys:** `ConcurrentAggregator` retains one `LongAdder` per distinct `serviceName` with an `ERROR` event, assuming bounded service cardinality.
-- **Static worker count:** The worker `ExecutorService` runs a fixed thread count for the duration of a pipeline execution without dynamic scaling.
+Timings are measured in-process after warm-up rather than forked JMH runs (so GC and OS scheduling are included), processing state stays in memory without file-offset checkpointing, worker thread counts stay static during a run, and `ConcurrentAggregator` retains one `LongAdder` per distinct service with an `ERROR` event.
